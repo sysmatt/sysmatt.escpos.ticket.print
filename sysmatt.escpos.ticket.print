@@ -30,7 +30,22 @@ logging.basicConfig(stream=sys.stderr, level=logging.WARNING, format=loggingForm
 logger = logging.getLogger(ME)
 start_time = time.time()
 
-parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter)
+
+moreHelp = \
+"""
+
+Hint:  How to build python-escpos, The current version avail from PIP is out of date...
+
+    #!/bin/bash 
+    cd /root
+    git clone --recurse-submodules  https://github.com/python-escpos/python-escpos.git
+    cd python-escpos/
+    python3 setup.py  build
+    python3 setup.py install
+
+"""
+
+parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter, epilog=moreHelp)
 parser.add_argument("-v", "--verbose",  help="increase output verbosity", action="store_true")
 parser.add_argument("-D", "--debug",    help="enable debugging output", action="store_true")
 parser.add_argument("-l", "--logo",     help="image file to print at top of ticket", type=str)
@@ -53,6 +68,7 @@ parser.add_argument(      "--qrdata",   help="print a qr barcode at the botton w
 parser.add_argument(      "--dummy",    help="do everything except printing", action='store_true')
 parser.add_argument(      "--impl",     help="graphics implementation to use, one of: bitImageRaster, graphics, bitImageColumn.  Default=bitImageColumn ... Note: bitImageRaster works best with Citizen CT-S310, graphics mode seems to work well with EPSON, the crappy generic 58mm unit only works with bitImageColumn -- YMMV be prepared to waste a lot of paper.", type=str, default='bitImageColumn')
 parser.add_argument("title",            help="the title of the ticket", type=str, default="Ticket")
+
 args = parser.parse_args()
 
 if args.verbose:

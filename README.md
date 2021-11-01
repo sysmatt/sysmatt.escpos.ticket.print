@@ -57,4 +57,13 @@ optional arguments:
                         well with EPSON, the crappy generic 58mm unit only
                         works with bitImageColumn -- YMMV be prepared to waste
                         a lot of paper.
+
+Hint:  How to build python-escpos, The current version avail from PIP is out of date...
+
+    #!/bin/bash 
+    cd /root
+    git clone --recurse-submodules  https://github.com/python-escpos/python-escpos.git
+    cd python-escpos/
+    python3 setup.py  build
+    python3 setup.py install
 ```
