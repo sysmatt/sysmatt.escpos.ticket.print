@@ -4,9 +4,9 @@ A python3 program to format STDIN into a ticket on a thermal receipt printer tha
 
 
 
-HELP OUTPUT
-===========
-
+# HELP OUTPUT
+# ===========
+```
 usage: sysmatt.escpos.ticket.print [-h] [-v] [-D] [-l LOGO]
                                    [--logomax LOGOMAX] [-p PROFILE] [-d DEST]
                                    [-t TRAILER] [-T TSIZE] [-S SIZE]
@@ -57,3 +57,4 @@ optional arguments:
                         well with EPSON, the crappy generic 58mm unit only
                         works with bitImageColumn -- YMMV be prepared to waste
                         a lot of paper.
+```
