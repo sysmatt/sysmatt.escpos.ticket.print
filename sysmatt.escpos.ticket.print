@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+
+import escpos.printer 
+import subprocess
+import os, sys, logging, datetime, time, pprint, warnings, argparse, re, configparser, shutil, imaplib, email, email.header, email.utils, string, subprocess, uuid
+import pprint
+from PIL import Image, ImageOps, ExifTags
+import numpy as np
+
+defaultPrinter = "58raw"
+
+
+
+# Use PIL to create a one pixel image used for horiz rule sep
+sepPixImage = Image.fromarray( np.array([ 
+    [ (0, 0, 0), (0, 0, 0)], 
+    [ (0, 0, 0), (0, 0, 0)],
+    [ (0, 0, 0), (0, 0, 0)],
+    [ (255, 255, 255), (255, 255, 255)],
+    [ (255, 255, 255), (255, 255, 255)]
+    ], dtype=np.uint8) )
+#sepPixImage = Image.fromarray( np.array([ [ (0, 0, 0) ] ], dtype=np.uint8) ) 
+
+
+
+#warnings.filterwarnings('ignore')
+ME = os.path.basename(sys.argv[0])
+loggingFormat='%(asctime)s %(filename)s: %(message)s'
+logging.basicConfig(stream=sys.stderr, level=logging.WARNING, format=loggingFormat)
+logger = logging.getLogger(ME)
+start_time = time.time()
+
+parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter)
+parser.add_argument("-v", "--verbose",  help="increase output verbosity", action="store_true")
+parser.add_argument("-D", "--debug",    help="enable debugging output", action="store_true")
+parser.add_argument("-l", "--logo",     help="image file to print at top of ticket", type=str)
+parser.add_argument(      "--logomax",  help="resize logo to max pixels in either direction", type=int)
+parser.add_argument("-p", "--profile",  help="specify the escpos printer profile... In hindsight this doesnt seem to work with anything... Go figure", type=str)
+parser.add_argument("-d", "--dest",     help="specify the printer destination, default=citizen-raw", type=str, default="citizen-raw")
+parser.add_argument("-t", "--trailer",  help="trailer appended to the end of the ticket in small text", type=str, default="")
+parser.add_argument("-T", "--tsize",    help="text size for title", type=int, default=2)
+parser.add_argument("-S", "--size",     help="text size for body", type=int, default=1)
+parser.add_argument("-P", "--pixwidth", help="pixel width, CT-S310=576 (default), Generic 58mm=384", type=int, default=576)
+parser.add_argument("-H", "--head",     help="max lines of body to print, 0=no limit (default)", type=int, default=0)
+parser.add_argument("-c", "--cut",      help="cut paper after printing", action="store_true")
+parser.add_argument("-b", "--beep",     help="beep after printing", action="store_true")
+parser.add_argument("-C", "--center",   help="center title, default is left", action="store_true")
+parser.add_argument("-e", "--eject",    help="extra newlines after print to eject page", type=int, default=1)
+parser.add_argument("-R", "--remote",   help="remote print spooler", type=str, default="")
+parser.add_argument(      "--image",    help="specify image files to print after any body text. Can be repeated. Images are resized and rotated.", type=str, action='append')
+parser.add_argument(      "--qrsize",   help="specify the size for qr barcodes, 1-16, default=3", type=int, default=3)
+parser.add_argument(      "--qrdata",   help="print a qr barcode at the botton with this data", type=str, action='append')
+parser.add_argument(      "--dummy",    help="do everything except printing", action='store_true')
+parser.add_argument(      "--impl",     help="graphics implementation to use, one of: bitImageRaster, graphics, bitImageColumn.  Default=bitImageColumn ... Note: bitImageRaster works best with Citizen CT-S310, graphics mode seems to work well with EPSON, the crappy generic 58mm unit only works with bitImageColumn -- YMMV be prepared to waste a lot of paper.", type=str, default='bitImageColumn')
+parser.add_argument("title",            help="the title of the ticket", type=str, default="Ticket")
+args = parser.parse_args()
+
+if args.verbose:
+    logger.setLevel(logging.INFO)
+if args.debug:
+    logger.setLevel(logging.DEBUG)
+
+titleAlign='left'
+if args.center:
+    titleAlign='center'
+
+
+
+def bomb(chunk):
+	logger.error("%s",chunk)
+	sys.exit(1)
+
+def handleBarcodes(chunk):
+    # s/([\n\s])\*(\w+)\*([\s\n])/$1$2\n$BB$2$BE\n$3/g
+    # Any word text between asterisks, ie: *BARCODE*
+    for bcdata in re.findall(r'[\n\s]\*(\w+)\*[\s\n]',chunk):
+        logger.debug('bcdata[{}]'.format(bcdata))
+        if( len(bcdata) > 20 ): next
+        p.barcode(bcdata, 'CODE39')
+        #p.soft_barcode('code39', bcdata)
+
+
+p = escpos.printer.Dummy() 
+#imageImpl='bitImageRaster'
+#imageImpl='graphics'
+#imageImpl='bitImageColumn'
+imageImpl=args.impl
+
+# Override the width from profile, if provided
+p.profile.profile_data['media']['width']['pixels']=args.pixwidth
+
+if args.logo:
+    logoMax = (args.pixwidth,1500)
+    if args.logomax:
+        logoMax = (args.logomax,args.logomax)
+    im = Image.open(args.logo)
+    try:
+        # rotate using exif if avail
+        for orientation in ExifTags.TAGS.keys():
+            if ExifTags.TAGS[orientation]=='Orientation':
+                break
+        exif=dict(im._getexif().items())
+
+        if exif[orientation] == 3:
+            im=im.rotate(180, expand=True)
+        elif exif[orientation] == 6:
+            im=im.rotate(270, expand=True)
+        elif exif[orientation] == 8:
+            im=im.rotate(90, expand=True)
+
+    except (AttributeError, KeyError, IndexError):
+        # cases: image don't have getexif
+        pass
+    im.thumbnail(logoMax)
+    p.image(im,  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True)
+
+
+p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],15) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
+p.set(align='left', font='a', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=False) 
+
+# Large text for TITLE
+p.set(align=titleAlign, font='a', bold=True, underline=0, width=args.tsize, height=args.tsize, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True) 
+p.text('{}\n'.format(args.title))
+# Print sep bar
+p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],15) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
+
+# Ticket text
+p.set(align='left', font='a', bold=False, underline=0, width=args.size, height=args.size, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True) 
+
+# Read body from STDIN up to --head lines
+with sys.stdin as lines:
+    for ctr,line in enumerate(lines):
+        if args.head > 0:
+            if ctr > (args.head-1): 
+                break
+        p.set(align='left', font='a', bold=False, underline=0, width=args.size, height=args.size, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True) 
+        p.text('{}'.format(line))
+        handleBarcodes(line)
+
+if args.image:
+    for imageFile in args.image:
+        logoMax = (args.pixwidth,1500)
+        try:
+            im = Image.open(imageFile)
+            try:
+                # rotate using exif if avail
+                for orientation in ExifTags.TAGS.keys():
+                    if ExifTags.TAGS[orientation]=='Orientation':
+                        break
+                exif=dict(im._getexif().items())
+
+                if exif[orientation] == 3:
+                    im=im.rotate(180, expand=True)
+                elif exif[orientation] == 6:
+                    im=im.rotate(270, expand=True)
+                elif exif[orientation] == 8:
+                    im=im.rotate(90, expand=True)
+
+            except (AttributeError, KeyError, IndexError):
+                # cases: image don't have getexif
+                pass
+            im.thumbnail(logoMax)
+            p.image(im,  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True)
+        except BaseException as err:   # Handle file open problems
+            logger.error("While opening image file: {}, Got error: {}".format(imageFile,err))
+            pass
+
+if args.qrdata:
+    for qrd in args.qrdata:
+        p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],8) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
+        p.qr(qrd, ec=0, size=args.qrsize, model=2, native=False, center=True, impl=imageImpl)
+        p.set(align='center', font='a', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True) 
+        p.text('{}\n'.format(qrd))
+
+# Tiny trailer text
+p.set(align='right', font='b', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True) 
+p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],8) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
+p.text('[{}] {}'.format(datetime.datetime.now(), args.trailer))
+
+#p.text('\n')
+for i in range(args.eject):
+    p.text('\n')
+
+if args.cut: 
+    p.cut(mode='PART')
+
+if args.beep: 
+    p._raw(b'\033\036')
+
+if args.dummy:
+    logger.info("Dummy mode, no printing")
+else:
+    if args.remote:
+        with subprocess.Popen(['lp', '-h', args.remote, '-d', args.dest], stdin=subprocess.PIPE) as pr:
+            pr.stdin.write(p.output)
+    else:
+        with subprocess.Popen(['lp', '-d', args.dest], stdin=subprocess.PIPE) as pr:
+            pr.stdin.write(p.output)
+
+
+    
+
+
+    
