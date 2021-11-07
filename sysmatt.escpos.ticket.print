@@ -67,6 +67,7 @@ parser.add_argument("-e", "--eject",    help="extra newlines after print to ejec
 parser.add_argument("-R", "--remote",   help="remote print spooler", type=str, default="")
 parser.add_argument(      "--image",    help="specify image files to print after any body text. Can be repeated. Images are resized and rotated.", type=str, action='append')
 parser.add_argument(      "--imagesep", help="print a bar between images", action='store_true')
+parser.add_argument(      "--imagename",help="print the image filename after each image", action='store_true')
 parser.add_argument(      "--qrsize",   help="specify the size for qr barcodes, 1-16, default=3", type=int, default=3)
 parser.add_argument(      "--qrdata",   help="print a qr barcode at the botton with this data", type=str, action='append')
 parser.add_argument(      "--dummy",    help="do everything except printing", action='store_true')
@@ -141,13 +142,13 @@ p.set(align='left', font='a', bold=False, underline=0, width=1, height=1, densit
 
 if args.header:
     # Super Large for HEADER
-    p.set(align=titleAlign, font='a', bold=True, underline=0, width=args.hsize, height=args.hsize, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True) 
+    p.set(align=titleAlign, font='a', bold=True, underline=0, width=args.hsize, height=args.hsize, density=9, invert=False, smooth=True, flip=False, double_width=False, double_height=False, custom_size=True) 
     p.text('{}\n'.format(args.header))
     # Print sep bar
     p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],15) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
 
 # Large text for TITLE
-p.set(align=titleAlign, font='a', bold=True, underline=0, width=args.tsize, height=args.tsize, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True) 
+p.set(align=titleAlign, font='a', bold=True, underline=0, width=args.tsize, height=args.tsize, density=9, invert=False, smooth=True, flip=False, double_width=False, double_height=False, custom_size=True) 
 p.text('{}\n'.format(args.title))
 # Print sep bar
 p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],15) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
@@ -167,9 +168,9 @@ with sys.stdin as lines:
 
 if args.image:
     for imageFile in args.image:
+        logoMax = (args.pixwidth,1500)
         if args.imagesep:
             p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],8) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
-        logoMax = (args.pixwidth,1500)
         try:
             im = Image.open(imageFile)
             try:
@@ -205,6 +206,10 @@ if args.image:
         except BaseException as err:   # Handle file open problems
             logger.error("While opening image file: {}, Got error: {}".format(imageFile,err))
             pass
+
+        if args.imagename:
+            p.set(align='left', font='a', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True) 
+            p.text('[{}]\n'.format(os.path.basename(imageFile)))
 
 if args.qrdata:
     for qrd in args.qrdata:
