@@ -37,12 +37,19 @@ moreHelp = \
 Hint:  How to build python-escpos, The current version avail from PIP is out of date...
 
     #!/bin/bash 
+    apt install -y python3-pip
+    apt install -y python3-pil
+    apt install -y python3-numpy
+    pip3 install --upgrade  pyusb 
+    pip3 install --upgrade  qrcode  
+    pip3 install --upgrade  pyserial  
+    pip3 install --upgrade  python-barcode  
+
     cd /root
     git clone --recurse-submodules  https://github.com/python-escpos/python-escpos.git
     cd python-escpos/
     python3 setup.py  build
     python3 setup.py install
-
 [end]
 """
 
