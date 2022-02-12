@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
 
-import escpos.printer 
+import escpos.printer
 import subprocess
 import os, sys, logging, datetime, time, pprint, warnings, argparse, re, configparser, shutil, imaplib, email, email.header, email.utils, string, subprocess, uuid
 import pprint
-from PIL import Image, ImageOps, ExifTags
 import numpy as np
-
-defaultPrinter = "58raw"
-
-
+from PIL import Image, ImageDraw, ImageFont, ImageChops, ImageOps, ExifTags
+from string import ascii_letters
+import textwrap
 
 # Use PIL to create a one pixel image used for horiz rule sep
-sepPixImage = Image.fromarray( np.array([ 
-    [ (0, 0, 0), (0, 0, 0)], 
+sepPixImage = Image.fromarray( np.array([
+    [ (255, 255, 255), (255, 255, 255)],
+    [ (255, 255, 255), (255, 255, 255)],
+    [ (0, 0, 0), (0, 0, 0)],
     [ (0, 0, 0), (0, 0, 0)],
     [ (0, 0, 0), (0, 0, 0)],
     [ (255, 255, 255), (255, 255, 255)],
+    [ (255, 255, 255), (255, 255, 255)],
     [ (255, 255, 255), (255, 255, 255)]
     ], dtype=np.uint8) )
-#sepPixImage = Image.fromarray( np.array([ [ (0, 0, 0) ] ], dtype=np.uint8) ) 
-
-
 
 #warnings.filterwarnings('ignore')
 ME = os.path.basename(sys.argv[0])
@@ -36,14 +34,14 @@ moreHelp = \
 
 Hint:  How to build python-escpos, The current version avail from PIP is out of date...
 
-    #!/bin/bash 
+    #!/bin/bash
     apt install -y python3-pip
     apt install -y python3-pil
     apt install -y python3-numpy
-    pip3 install --upgrade  pyusb 
-    pip3 install --upgrade  qrcode  
-    pip3 install --upgrade  pyserial  
-    pip3 install --upgrade  python-barcode  
+    pip3 install --upgrade  pyusb
+    pip3 install --upgrade  qrcode
+    pip3 install --upgrade  pyserial
+    pip3 install --upgrade  python-barcode
 
     cd /root
     git clone --recurse-submodules  https://github.com/python-escpos/python-escpos.git
@@ -57,9 +55,12 @@ parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpForm
 parser.add_argument("-v", "--verbose",  help="increase output verbosity", action="store_true")
 parser.add_argument("-D", "--debug",    help="enable debugging output", action="store_true")
 parser.add_argument("-l", "--logo",     help="image file to print at top of ticket", type=str)
+parser.add_argument(      "--landscape",help="rotate everthing to landscape, for example banner printing (alpha), Only works with text when TTF fonts are specified", action="store_true")
 parser.add_argument(      "--logomax",  help="resize logo to max pixels in either direction", type=int)
 parser.add_argument("-p", "--profile",  help="specify the escpos printer profile... In hindsight this doesnt seem to work with anything... Go figure", type=str)
 parser.add_argument(      "--header",   help="prepend a super header in extra large text", type=str, default="")
+parser.add_argument(      "--headerttf",help="re-render header text into an image using this ttf font file, --hsize is ttf font size", type=str, default='')
+parser.add_argument(      "--titlettf", help="re-render title text into an image using this ttf font file, --tsize is ttf font size", type=str, default='')
 parser.add_argument(      "--hsize",    help="text size for super header", type=int, default=4)
 parser.add_argument("-d", "--dest",     help="specify the printer destination, default=citizen-raw", type=str, default="citizen-raw")
 parser.add_argument("-t", "--trailer",  help="trailer appended to the end of the ticket in small text", type=str, default="")
@@ -71,8 +72,10 @@ parser.add_argument("-c", "--cut",      help="cut paper after printing", action=
 parser.add_argument("-b", "--beep",     help="beep after printing", action="store_true")
 parser.add_argument("-C", "--center",   help="center title, default is left", action="store_true")
 parser.add_argument("-e", "--eject",    help="extra newlines after print to eject page", type=int, default=1)
+parser.add_argument(      "--density",  help="set print density (alpha, escpos fn=49, may not work with all models)", type=str, default='')
 parser.add_argument("-R", "--remote",   help="remote print spooler", type=str, default="")
 parser.add_argument(      "--image",    help="specify image files to print after any body text. Can be repeated. Images are resized and rotated.", type=str, action='append')
+parser.add_argument(      "--bodyttf",  help="re-render body text into an image using this ttf font file, --size is ttf font size", type=str, default='')
 parser.add_argument(      "--imagesep", help="print a bar between images", action='store_true')
 parser.add_argument(      "--imagename",help="print the image filename after each image", action='store_true')
 parser.add_argument(      "--qrsize",   help="specify the size for qr barcodes, 1-16, default=3", type=int, default=3)
@@ -108,21 +111,55 @@ def handleBarcodes(chunk):
         p.barcode(bcdata, 'CODE39')
         #p.soft_barcode('code39', bcdata)
 
+def renderTextAsImage(text,fontSize,fontFile):
+    size = 1000,10000  # Arbitrary, but needs to be large enough for text and way bigger than printer width
+    finishedSize = args.pixwidth,100000
+    if args.landscape: 
+        size = 10000,3000  # Bigger, Wider.... for landscape
+        finishedSize = 100000,args.pixwidth
+    img = Image.new('RGB', size, color='white');
+    # Load custom font
+    font = ImageFont.truetype(font=fontFile, size=(fontSize*2))   # Correct font size since we basically always resize the image in half
+    # Create DrawText object
+    draw = ImageDraw.Draw(im=img)
+    # Calculate the average length of a single character of our font.
+    # Note: this takes into account the specific font and font size.
+    avg_char_width = sum(font.getsize(char)[0] for char in ascii_letters) / len(ascii_letters)
+    # Translate this average length into a character count
+    max_char_count = int(img.size[0] * .8 / avg_char_width)
+    # Create a wrapped text object using scaled character count
+    text = textwrap.fill(text=text, width=max_char_count, drop_whitespace=False, replace_whitespace=False)
+    # Add text to the image
+    draw.text(xy=(img.size[0]/2, img.size[1] / 2), text=text, font=font, fill='#000000', anchor='mm')
+    # view the result
+    bg = Image.new(img.mode, img.size, img.getpixel((0,0)))
+    diff = ImageChops.difference(img, bg)
+    diff = ImageChops.add(diff, diff, 2.0, -100)
+    #Bounding box given as a 4-tuple defining the left, upper, right, and lower pixel coordinates.
+    #If the image is completely empty, this method returns None.
+    bbox = diff.getbbox()
+    (tx,ty,bx,by) = bbox
+    xsz = bx-tx
+    ysz = by-ty
+    logger.debug("text[{}] bbox[{},{},{},{}] xsz[{}] ysz[{}]".format(text,tx,ty,bx,by,xsz,ysz))
+    newimg = img.crop(bbox)
+    newimg.thumbnail(finishedSize)
+    if args.landscape: 
+        newimg=newimg.rotate(90, expand=True)
+        (newx, newy) = newimg.size
+        bgsize = args.pixwidth, newy    # bg image hack, use whatever Y we got above by the max pixwidth
+        bgimg = Image.new('RGB', bgsize, color='white');
+        # Now paste the newimg on top of bgimg
+        pastex = int((args.pixwidth/2) - (newx/2))
+        logger.debug("landscape bgimg hack, pastex[{}]".format(pastex))
+        bgimg.paste(newimg,(pastex,0))
+        # debug ### bgimg.show()
+        return bgimg
+    #newimg.show() # Debugging
+    return newimg
 
-p = escpos.printer.Dummy() 
-#imageImpl='bitImageRaster'
-#imageImpl='graphics'
-#imageImpl='bitImageColumn'
-imageImpl=args.impl
-
-# Override the width from profile, if provided
-p.profile.profile_data['media']['width']['pixels']=args.pixwidth
-
-if args.logo:
-    logoMax = (args.pixwidth,1500)
-    if args.logomax:
-        logoMax = (args.logomax,args.logomax)
-    im = Image.open(args.logo)
+def autoRotateImage(im):
+    """Attempt to read the exif and rotate the image obj to proper rotation"""
     try:
         # rotate using exif if avail
         for orientation in ExifTags.TAGS.keys():
@@ -140,64 +177,107 @@ if args.logo:
     except (AttributeError, KeyError, IndexError):
         # cases: image don't have getexif
         pass
+    return(im)
+
+
+logger.info("STARTUP sys.path=[{}]".format(sys.path))
+
+p = escpos.printer.Dummy()
+#imageImpl='bitImageRaster'
+#imageImpl='graphics'
+#imageImpl='bitImageColumn'
+imageImpl=args.impl
+
+# Override the width from profile, if provided
+p.profile.profile_data['media']['width']['pixels']=args.pixwidth
+
+if args.density:
+    # Its set, convert to int
+    d=int(args.density)
+    logger.info("--density=[{}] d[{}]".format(args.density,d))
+    # func=49, Set density: GS ( K pL pH fn m
+    #        GS  (K  (2byt) fn     d decimal to bin
+    cmd=b'\035(K\002\000\061' + bytearray((d,))
+    logger.debug("Density Command (hex): [{}]".format(' '.join('{:02x}'.format(x) for x in cmd)))
+    #p._raw(b'\035(K\002\000\061' + bytearray((d,)))
+    p._raw(cmd)
+    #bomb("Just testing...")
+
+
+
+
+
+
+if args.logo:
+    logoMax = (args.pixwidth,1500)
+    if args.landscape: 
+        logoMax = (10000,args.pixwidth)
+    if args.logomax:
+        logoMax = (args.logomax,args.logomax)
+    im = autoRotateImage(Image.open(args.logo))
     im.thumbnail(logoMax)
+    if args.landscape: 
+        im=im.rotate(90, expand=True)
     p.image(im,  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True)
 
 
 p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],15) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
-p.set(align='left', font='a', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=False) 
+p.set(align='left', font='a', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=False)
 
 if args.header:
-    # Super Large for HEADER
-    p.set(align=titleAlign, font='a', bold=True, underline=0, width=args.hsize, height=args.hsize, density=9, invert=False, smooth=True, flip=False, double_width=False, double_height=False, custom_size=True) 
-    p.text('{}\n'.format(args.header))
+    if args.headerttf:
+        p.image(renderTextAsImage(args.header,args.hsize,args.headerttf), high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True )
+        p.text('\n')
+    else:
+        # Super Large for HEADER
+        p.set(align=titleAlign, font='a', bold=True, underline=0, width=args.hsize, height=args.hsize, density=9, invert=False, smooth=True, flip=False, double_width=False, double_height=False, custom_size=True)
+        p.text('{}\n'.format(args.header))
     # Print sep bar
     p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],15) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
 
 # Large text for TITLE
-p.set(align=titleAlign, font='a', bold=True, underline=0, width=args.tsize, height=args.tsize, density=9, invert=False, smooth=True, flip=False, double_width=False, double_height=False, custom_size=True) 
-p.text('{}\n'.format(args.title))
+if args.titlettf:
+    p.image(renderTextAsImage(args.title,args.tsize,args.titlettf), high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True )
+    p.text('\n')
+else:
+    p.set(align=titleAlign, font='a', bold=True, underline=0, width=args.tsize, height=args.tsize, density=9, invert=False, smooth=True, flip=False, double_width=False, double_height=False, custom_size=True)
+    p.text('{}\n'.format(args.title))
 # Print sep bar
 p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],15) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
 
-# Ticket text
-p.set(align='left', font='a', bold=False, underline=0, width=args.size, height=args.size, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True) 
 
-# Read body from STDIN up to --head lines
-with sys.stdin as lines:
-    for ctr,line in enumerate(lines):
-        if args.head > 0:
-            if ctr > (args.head-1): 
-                break
-        p.set(align='left', font='a', bold=False, underline=0, width=args.size, height=args.size, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True) 
-        p.text('{}'.format(line))
-        handleBarcodes(line)
+if args.bodyttf:
+    allLines=""
+    with sys.stdin as lines:
+        for ctr,line in enumerate(lines):
+            if args.head > 0:
+                if ctr > (args.head-1):
+                    break
+            allLines += line
+    p.image(renderTextAsImage(allLines,args.size,args.bodyttf), high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True )
+    p.text('\n')
+else:
+    # Ticket text
+    p.set(align='left', font='a', bold=False, underline=0, width=args.size, height=args.size, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True)
+    # Read body from STDIN up to --head lines
+    with sys.stdin as lines:
+        for ctr,line in enumerate(lines):
+            if args.head > 0:
+                if ctr > (args.head-1):
+                    break
+            p.set(align='left', font='a', bold=False, underline=0, width=args.size, height=args.size, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True)
+            p.text('{}'.format(line))
+            handleBarcodes(line)
 
 if args.image:
     for imageFile in args.image:
         logoMax = (args.pixwidth,1500)
+        if args.landscape: 
+            logoMax = (10000,args.pixwidth)
         if args.imagesep:
             p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],8) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
         try:
-            im = Image.open(imageFile)
-            try:
-                # rotate using exif if avail
-                for orientation in ExifTags.TAGS.keys():
-                    if ExifTags.TAGS[orientation]=='Orientation':
-                        break
-                exif=dict(im._getexif().items())
-
-                if exif[orientation] == 3:
-                    im=im.rotate(180, expand=True)
-                elif exif[orientation] == 6:
-                    im=im.rotate(270, expand=True)
-                elif exif[orientation] == 8:
-                    im=im.rotate(90, expand=True)
-
-            except (AttributeError, KeyError, IndexError):
-                # cases: image don't have getexif
-                pass
-
+            im = autoRotateImage(Image.open(imageFile))
             # Below results in lots of wasted paper... not sure why this barfs
             if args.autorotate:
                 width,height = im.size
@@ -209,24 +289,26 @@ if args.image:
 
 
             im.thumbnail(logoMax)
+            if args.landscape: 
+                im=im.rotate(90, expand=True)
             p.image(im,  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True)
         except BaseException as err:   # Handle file open problems
             logger.error("While opening image file: {}, Got error: {}".format(imageFile,err))
             pass
 
         if args.imagename:
-            p.set(align='left', font='a', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True) 
+            p.set(align='left', font='a', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True)
             p.text('[{}]\n'.format(os.path.basename(imageFile)))
 
 if args.qrdata:
     for qrd in args.qrdata:
         p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],8) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
         p.qr(qrd, ec=0, size=args.qrsize, model=2, native=False, center=True, impl=imageImpl)
-        p.set(align='center', font='a', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True) 
+        p.set(align='center', font='a', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True)
         p.text('{}\n'.format(qrd))
 
 # Tiny trailer text
-p.set(align='right', font='b', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True) 
+p.set(align='right', font='b', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True)
 p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],8) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
 p.text('[{}] {}'.format(datetime.datetime.now(), args.trailer))
 
@@ -234,10 +316,10 @@ p.text('[{}] {}'.format(datetime.datetime.now(), args.trailer))
 for i in range(args.eject):
     p.text('\n')
 
-if args.cut: 
+if args.cut:
     p.cut(mode='PART')
 
-if args.beep: 
+if args.beep:
     p._raw(b'\033\036')
 
 if args.dummy:
@@ -249,9 +331,3 @@ else:
     else:
         with subprocess.Popen(['lp', '-d', args.dest], stdin=subprocess.PIPE) as pr:
             pr.stdin.write(p.output)
-
-
-    
-
-
-    
