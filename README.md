@@ -15,9 +15,10 @@ usage: sysmatt.escpos.ticket.print [-h] [-v] [-D] [-l LOGO] [--landscape]
                                    [-P PIXWIDTH] [-H HEAD] [-c] [-b] [-C]
                                    [-e EJECT] [--density DENSITY] [-R REMOTE]
                                    [--image IMAGE] [--bodyttf BODYTTF]
-                                   [--imagesep] [--imagename]
-                                   [--qrsize QRSIZE] [--qrdata QRDATA]
-                                   [--dummy] [--autorotate] [--impl IMPL]
+                                   [--bodyttfwrap BODYTTFWRAP] [--imagesep]
+                                   [--imagename] [--qrsize QRSIZE]
+                                   [--qrdata QRDATA] [--dummy] [--autorotate]
+                                   [--impl IMPL]
                                    title
 
 positional arguments:
@@ -65,6 +66,8 @@ options:
                         be repeated. Images are resized and rotated.
   --bodyttf BODYTTF     re-render body text into an image using this ttf font
                         file, --size is ttf font size
+  --bodyttfwrap BODYTTFWRAP
+                        When re-rending, force text wrapping at N characters
   --imagesep            print a bar between images
   --imagename           print the image filename after each image
   --qrsize QRSIZE       specify the size for qr barcodes, 1-16, default=3

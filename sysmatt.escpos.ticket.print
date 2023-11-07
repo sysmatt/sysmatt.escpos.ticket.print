@@ -76,6 +76,7 @@ parser.add_argument(      "--density",  help="set print density (alpha, escpos f
 parser.add_argument("-R", "--remote",   help="remote print spooler", type=str, default="")
 parser.add_argument(      "--image",    help="specify image files to print after any body text. Can be repeated. Images are resized and rotated.", type=str, action='append')
 parser.add_argument(      "--bodyttf",  help="re-render body text into an image using this ttf font file, --size is ttf font size", type=str, default='')
+parser.add_argument(  "--bodyttfwrap",  help="When re-rending, force text wrapping at N characters", type=int, default=0)
 parser.add_argument(      "--imagesep", help="print a bar between images", action='store_true')
 parser.add_argument(      "--imagename",help="print the image filename after each image", action='store_true')
 parser.add_argument(      "--qrsize",   help="specify the size for qr barcodes, 1-16, default=3", type=int, default=3)
@@ -112,8 +113,8 @@ def handleBarcodes(chunk):
         #p.soft_barcode('code39', bcdata)
 
 def renderTextAsImage(text,fontSize,fontFile):
-    size = 1000,10000  # Arbitrary, but needs to be large enough for text and way bigger than printer width
-    finishedSize = args.pixwidth,100000
+    size = 2000,20000  # Arbitrary, but needs to be large enough for text and way bigger than printer width
+    finishedSize = args.pixwidth,200000
     if args.landscape: 
         size = 10000,3000  # Bigger, Wider.... for landscape
         finishedSize = 100000,args.pixwidth
@@ -124,14 +125,31 @@ def renderTextAsImage(text,fontSize,fontFile):
     draw = ImageDraw.Draw(im=img)
     # Calculate the average length of a single character of our font.
     # Note: this takes into account the specific font and font size.
-    avg_char_width = sum(font.getsize(char)[0] for char in ascii_letters) / len(ascii_letters)
+    # DeprecationWarning: getsize is deprecated and will be removed in Pillow 10 (2023-07-01). Use getbbox or getlength instead.
+    avg_char_width = sum(font.getlength(char) for char in ascii_letters) / len(ascii_letters)
+    #for char in ascii_letters:
+    #    logger.debug("getsize   char[{}]: {}".format(char, font.getsize(char)[0]))
+    #    logger.debug("getbbox   char[{}]: {}".format(char, font.getbbox(char)))
+    #    logger.debug("getlength char[{}]: {}".format(char, font.getlength(char)))
     # Translate this average length into a character count
-    max_char_count = int(img.size[0] * .8 / avg_char_width)
+    #max_char_count = int(img.size[0] * .8 / avg_char_width)
+    max_char_count = int(img.size[0] / avg_char_width)
     # Create a wrapped text object using scaled character count
-    text = textwrap.fill(text=text, width=max_char_count, drop_whitespace=False, replace_whitespace=False)
+    logger.debug('max_char_count[{}]'.format(max_char_count))
+    if args.bodyttfwrap:
+        max_char_count=args.bodyttfwrap
+        logger.debug('args.bodyttfwrap override max_char_count[{}]'.format(max_char_count))
+    logger.debug('pre  wrap text[{}]'.format(text))
+    newtext=''
+    for line in text.splitlines():
+        newtext += '{}\n'.format(textwrap.fill(text=line, width=max_char_count, drop_whitespace=False, replace_whitespace=True, break_long_words=True,break_on_hyphens=False))
+    text=newtext
+    logger.debug('post wrap text[{}]'.format(text))
     # Add text to the image
+    logger.debug("max_char_count[{}]".format(max_char_count))
     draw.text(xy=(img.size[0]/2, img.size[1] / 2), text=text, font=font, fill='#000000', anchor='mm')
     # view the result
+    #img.save("/tmp/save.png")
     bg = Image.new(img.mode, img.size, img.getpixel((0,0)))
     diff = ImageChops.difference(img, bg)
     diff = ImageChops.add(diff, diff, 2.0, -100)
@@ -156,6 +174,7 @@ def renderTextAsImage(text,fontSize,fontFile):
         # debug ### bgimg.show()
         return bgimg
     #newimg.show() # Debugging
+    #newimg.save("/tmp/save.png")
     return newimg
 
 def autoRotateImage(im):
@@ -254,7 +273,8 @@ if args.bodyttf:
                 if ctr > (args.head-1):
                     break
             allLines += line
-    p.image(renderTextAsImage(allLines,args.size,args.bodyttf), high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True )
+    if allLines:
+        p.image(renderTextAsImage(allLines,args.size,args.bodyttf), high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True )
     p.text('\n')
 else:
     # Ticket text
