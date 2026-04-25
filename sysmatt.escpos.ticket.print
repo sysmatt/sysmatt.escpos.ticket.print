@@ -1,90 +1,84 @@
 #!/usr/bin/env python3
 
-import escpos.printer
+import argparse
+import datetime
+import logging
+import os
+import re
 import subprocess
-import os, sys, logging, datetime, time, pprint, warnings, argparse, re, configparser, shutil, imaplib, email, email.header, email.utils, string, subprocess, uuid
-import pprint
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageChops, ImageOps, ExifTags
-from string import ascii_letters
+import sys
 import textwrap
+from string import ascii_letters
 
-# Use PIL to create a one pixel image used for horiz rule sep
-sepPixImage = Image.fromarray( np.array([
-    [ (255, 255, 255), (255, 255, 255)],
-    [ (255, 255, 255), (255, 255, 255)],
-    [ (0, 0, 0), (0, 0, 0)],
-    [ (0, 0, 0), (0, 0, 0)],
-    [ (0, 0, 0), (0, 0, 0)],
-    [ (255, 255, 255), (255, 255, 255)],
-    [ (255, 255, 255), (255, 255, 255)],
-    [ (255, 255, 255), (255, 255, 255)]
-    ], dtype=np.uint8) )
+import escpos.printer
+import numpy as np
+from PIL import ExifTags, Image, ImageChops, ImageDraw, ImageFont, ImageOps
 
-#warnings.filterwarnings('ignore')
+# Separator bar: 2px white / 3px black / 3px white
+sepPixImage = Image.fromarray(np.array([
+    [(255, 255, 255), (255, 255, 255)],
+    [(255, 255, 255), (255, 255, 255)],
+    [(0,   0,   0),   (0,   0,   0)],
+    [(0,   0,   0),   (0,   0,   0)],
+    [(0,   0,   0),   (0,   0,   0)],
+    [(255, 255, 255), (255, 255, 255)],
+    [(255, 255, 255), (255, 255, 255)],
+    [(255, 255, 255), (255, 255, 255)],
+], dtype=np.uint8))
+
 ME = os.path.basename(sys.argv[0])
-loggingFormat='%(asctime)s %(filename)s: %(message)s'
-logging.basicConfig(stream=sys.stderr, level=logging.WARNING, format=loggingFormat)
+logging.basicConfig(stream=sys.stderr, level=logging.WARNING,
+                    format='%(asctime)s %(filename)s: %(message)s')
 logger = logging.getLogger(ME)
-start_time = time.time()
 
+moreHelp = """
+Install python-escpos (try PyPI first; build from source if the release is outdated):
 
-moreHelp = \
+    pip install python-escpos
+
+    # Or build from source:
+    pip install pyusb qrcode pyserial python-barcode
+    git clone --recurse-submodules https://github.com/python-escpos/python-escpos.git
+    cd python-escpos && pip install .
 """
 
-Hint:  How to build python-escpos, The current version avail from PIP is out of date...
-
-    #!/bin/bash
-    apt install -y python3-pip
-    apt install -y python3-pil
-    apt install -y python3-numpy
-    pip3 install --upgrade  pyusb
-    pip3 install --upgrade  qrcode
-    pip3 install --upgrade  pyserial
-    pip3 install --upgrade  python-barcode
-
-    cd /root
-    git clone --recurse-submodules  https://github.com/python-escpos/python-escpos.git
-    cd python-escpos/
-    python3 setup.py  build
-    python3 setup.py install
-[end]
-"""
-
-parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter, epilog=moreHelp)
-parser.add_argument("-v", "--verbose",  help="increase output verbosity", action="store_true")
-parser.add_argument("-D", "--debug",    help="enable debugging output", action="store_true")
-parser.add_argument("-l", "--logo",     help="image file to print at top of ticket", type=str)
-parser.add_argument(      "--landscape",help="rotate everthing to landscape, for example banner printing (alpha), Only works with text when TTF fonts are specified", action="store_true")
-parser.add_argument(      "--logomax",  help="resize logo to max pixels in either direction", type=int)
-parser.add_argument("-p", "--profile",  help="specify the escpos printer profile... In hindsight this doesnt seem to work with anything... Go figure", type=str)
-parser.add_argument(      "--header",   help="prepend a super header in extra large text", type=str, default="")
-parser.add_argument(      "--headerttf",help="re-render header text into an image using this ttf font file, --hsize is ttf font size", type=str, default='')
-parser.add_argument(      "--titlettf", help="re-render title text into an image using this ttf font file, --tsize is ttf font size", type=str, default='')
-parser.add_argument(      "--hsize",    help="text size for super header", type=int, default=4)
-parser.add_argument("-d", "--dest",     help="specify the printer destination, default=citizen-raw", type=str, default="citizen-raw")
-parser.add_argument("-t", "--trailer",  help="trailer appended to the end of the ticket in small text", type=str, default="")
-parser.add_argument("-T", "--tsize",    help="text size for title", type=int, default=2)
-parser.add_argument("-S", "--size",     help="text size for body", type=int, default=1)
-parser.add_argument("-P", "--pixwidth", help="pixel width, CT-S310=576 (default), Generic 58mm=384", type=int, default=576)
-parser.add_argument("-H", "--head",     help="max lines of body to print, 0=no limit (default)", type=int, default=0)
-parser.add_argument("-c", "--cut",      help="cut paper after printing", action="store_true")
-parser.add_argument("-b", "--beep",     help="beep after printing", action="store_true")
-parser.add_argument("-C", "--center",   help="center title, default is left", action="store_true")
-parser.add_argument("-e", "--eject",    help="extra newlines after print to eject page", type=int, default=1)
-parser.add_argument(      "--density",  help="set print density (alpha, escpos fn=49, may not work with all models)", type=str, default='')
-parser.add_argument("-R", "--remote",   help="remote print spooler", type=str, default="")
-parser.add_argument(      "--image",    help="specify image files to print after any body text. Can be repeated. Images are resized and rotated.", type=str, action='append')
-parser.add_argument(      "--bodyttf",  help="re-render body text into an image using this ttf font file, --size is ttf font size", type=str, default='')
-parser.add_argument(  "--bodyttfwrap",  help="When re-rending, force text wrapping at N characters", type=int, default=0)
-parser.add_argument(      "--imagesep", help="print a bar between images", action='store_true')
-parser.add_argument(      "--imagename",help="print the image filename after each image", action='store_true')
-parser.add_argument(      "--qrsize",   help="specify the size for qr barcodes, 1-16, default=3", type=int, default=3)
-parser.add_argument(      "--qrdata",   help="print a qr barcode at the botton with this data", type=str, action='append')
-parser.add_argument(      "--dummy",    help="do everything except printing", action='store_true')
-parser.add_argument(      "--autorotate",help="try auto-rotating --image imputs to produce largest print", action='store_true')
-parser.add_argument(      "--impl",     help="graphics implementation to use, one of: bitImageRaster, graphics, bitImageColumn.  Default=bitImageColumn ... Note: bitImageRaster works best with Citizen CT-S310, bitImageRaster or graphics mode seems to work well with EPSON, the crappy generic 58mm unit only works with bitImageColumn -- YMMV be prepared to waste a lot of paper.  NOTE2:  I dont know anymore... Its random.  it seems to depend on the image.  Try all of them and keep buying more paper.", type=str, default='bitImageColumn')
-parser.add_argument("title",            help="the title of the ticket", type=str, default="Ticket")
+parser = argparse.ArgumentParser(
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+    epilog=moreHelp,
+)
+parser.add_argument("-v", "--verbose",    help="increase output verbosity", action="store_true")
+parser.add_argument("-D", "--debug",      help="enable debug output and save intermediate images to /tmp/", action="store_true")
+parser.add_argument("-l", "--logo",       help="image file to print at top of ticket", type=str)
+parser.add_argument(      "--landscape",  help="rotate everything to landscape for banner printing (alpha); only works reliably with TTF fonts", action="store_true")
+parser.add_argument(      "--logomax",    help="resize logo so neither dimension exceeds this many pixels", type=int)
+parser.add_argument("-p", "--profile",    help="ESC/POS printer profile name", type=str)
+parser.add_argument(      "--header",     help="super-header text printed above the title in extra large text", type=str, default="")
+parser.add_argument(      "--headerttf",  help="render header as an image using this TTF font file (--hsize controls font size)", type=str, default='')
+parser.add_argument(      "--titlettf",   help="render title as an image using this TTF font file (--tsize controls font size)", type=str, default='')
+parser.add_argument(      "--hsize",      help="header text size multiplier", type=int, default=4)
+parser.add_argument("-d", "--dest",       help="CUPS printer destination name", type=str, default="citizen-raw")
+parser.add_argument("-t", "--trailer",    help="small text appended after the timestamp in the ticket footer", type=str, default="")
+parser.add_argument("-T", "--tsize",      help="title text size multiplier", type=int, default=2)
+parser.add_argument("-S", "--size",       help="body text size multiplier", type=int, default=1)
+parser.add_argument("-P", "--pixwidth",   help="printable pixel width — CT-S310: 576 (default), generic 58mm: 384", type=int, default=576)
+parser.add_argument("-H", "--head",       help="print only the first N lines of body text (0 = no limit)", type=int, default=0)
+parser.add_argument("-c", "--cut",        help="partial-cut paper after printing", action="store_true")
+parser.add_argument("-b", "--beep",       help="trigger printer buzzer after printing", action="store_true")
+parser.add_argument("-C", "--center",     help="centre-align the title (default: left)", action="store_true")
+parser.add_argument("-e", "--eject",      help="blank lines printed after the ticket to advance paper", type=int, default=1)
+parser.add_argument(      "--density",    help="print density (alpha; ESC/POS fn=49, not supported on all models)", type=str, default='')
+parser.add_argument("-R", "--remote",     help="remote print spooler host (lp -h HOST)", type=str, default="")
+parser.add_argument(      "--image",      help="image file to print after body text (repeatable); images are resized and rotated", type=str, action='append')
+parser.add_argument(      "--bodyttf",    help="render body text as an image using this TTF font file (--size controls font size)", type=str, default='')
+parser.add_argument(  "--bodyttfwrap",    help="force word-wrap at N characters when rendering body with TTF (0 = auto)", type=int, default=0)
+parser.add_argument(      "--imagesep",   help="print a separator bar between images", action='store_true')
+parser.add_argument(      "--imagename",  help="print the filename below each image", action='store_true')
+parser.add_argument(      "--qrsize",     help="QR code size, 1–16", type=int, default=3)
+parser.add_argument(      "--qrdata",     help="print a QR code at the bottom (repeatable)", type=str, action='append')
+parser.add_argument(      "--dummy",      help="do everything except sending output to the printer", action='store_true')
+parser.add_argument(      "--autorotate", help="auto-rotate landscape --image inputs to maximise print size", action='store_true')
+parser.add_argument(      "--impl",       help="graphics implementation: bitImageRaster, graphics, or bitImageColumn (default). bitImageRaster works well with Citizen CT-S310; bitImageColumn works with generic 58mm units. YMMV.", type=str, default='bitImageColumn')
+parser.add_argument("title",              help="ticket title (required)", type=str, default="Ticket")
 
 args = parser.parse_args()
 
@@ -93,261 +87,211 @@ if args.verbose:
 if args.debug:
     logger.setLevel(logging.DEBUG)
 
-titleAlign='left'
-if args.center:
-    titleAlign='center'
+titleAlign = 'center' if args.center else 'left'
 
-
-
-def bomb(chunk):
-	logger.error("%s",chunk)
-	sys.exit(1)
 
 def handleBarcodes(chunk):
-    # s/([\n\s])\*(\w+)\*([\s\n])/$1$2\n$BB$2$BE\n$3/g
-    # Any word text between asterisks, ie: *BARCODE*
-    for bcdata in re.findall(r'[\n\s]\*(\w+)\*[\s\n]',chunk):
-        logger.debug('bcdata[{}]'.format(bcdata))
-        if( len(bcdata) > 20 ): next
+    # Inline CODE39 barcode: surround a word with asterisks, e.g. *BARCODE*
+    for bcdata in re.findall(r'[\n\s]\*(\w+)\*[\s\n]', chunk):
+        logger.debug(f'bcdata[{bcdata}]')
+        if len(bcdata) > 20:
+            continue
         p.barcode(bcdata, 'CODE39')
-        #p.soft_barcode('code39', bcdata)
 
-def renderTextAsImage(text,fontSize,fontFile):
-    size = 2000,20000  # Arbitrary, but needs to be large enough for text and way bigger than printer width
-    finishedSize = args.pixwidth,200000
-    if args.landscape: 
-        size = 10000,3000  # Bigger, Wider.... for landscape
-        finishedSize = 100000,args.pixwidth
-    img = Image.new('RGB', size, color='white');
-    # Load custom font
-    font = ImageFont.truetype(font=fontFile, size=(fontSize*2))   # Correct font size since we basically always resize the image in half
-    # Create DrawText object
+
+def renderTextAsImage(text, fontSize, fontFile):
+    if args.landscape:
+        size = (10000, 3000)
+        finishedSize = (100000, args.pixwidth)
+    else:
+        size = (2000, 20000)
+        finishedSize = (args.pixwidth, 200000)
+
+    img = Image.new('RGB', size, color='white')
+    font = ImageFont.truetype(font=fontFile, size=(fontSize * 2))
     draw = ImageDraw.Draw(im=img)
-    # Calculate the average length of a single character of our font.
-    # Note: this takes into account the specific font and font size.
-    # DeprecationWarning: getsize is deprecated and will be removed in Pillow 10 (2023-07-01). Use getbbox or getlength instead.
-    avg_char_width = sum(font.getlength(char) for char in ascii_letters) / len(ascii_letters)
-    #for char in ascii_letters:
-    #    logger.debug("getsize   char[{}]: {}".format(char, font.getsize(char)[0]))
-    #    logger.debug("getbbox   char[{}]: {}".format(char, font.getbbox(char)))
-    #    logger.debug("getlength char[{}]: {}".format(char, font.getlength(char)))
-    # Translate this average length into a character count
-    #max_char_count = int(img.size[0] * .8 / avg_char_width)
+
+    avg_char_width = sum(font.getlength(c) for c in ascii_letters) / len(ascii_letters)
     max_char_count = int(img.size[0] / avg_char_width)
-    # Create a wrapped text object using scaled character count
-    logger.debug('max_char_count[{}]'.format(max_char_count))
     if args.bodyttfwrap:
-        max_char_count=args.bodyttfwrap
-        logger.debug('args.bodyttfwrap override max_char_count[{}]'.format(max_char_count))
-    logger.debug('pre  wrap text[{}]'.format(text))
-    newtext=''
+        max_char_count = args.bodyttfwrap
+    logger.debug(f'max_char_count[{max_char_count}]')
+
+    newtext = ''
     for line in text.splitlines():
-        newtext += '{}\n'.format(textwrap.fill(text=line, width=max_char_count, drop_whitespace=False, replace_whitespace=True, break_long_words=True,break_on_hyphens=False))
-    text=newtext
-    logger.debug('post wrap text[{}]'.format(text))
-    # Add text to the image
-    logger.debug("max_char_count[{}]".format(max_char_count))
-    draw.text(xy=(img.size[0]/2, img.size[1] / 2), text=text, font=font, fill='#000000', anchor='mm')
-    # view the result
-    #img.save("/tmp/save.png")
-    bg = Image.new(img.mode, img.size, img.getpixel((0,0)))
+        newtext += textwrap.fill(
+            text=line, width=max_char_count,
+            drop_whitespace=False, replace_whitespace=True,
+            break_long_words=True, break_on_hyphens=False,
+        ) + '\n'
+    text = newtext.rstrip()
+    logger.debug(f'post wrap text[{text}]')
+
+    draw.text(xy=(img.size[0] / 2, img.size[1] / 2), text=text, font=font,
+              fill='#000000', anchor='mm')
+
+    if args.debug:
+        img.save(f'/tmp/renderTextAsImage{datetime.datetime.now()}.png')
+
+    bg = Image.new(img.mode, img.size, img.getpixel((0, 0)))
     diff = ImageChops.difference(img, bg)
     diff = ImageChops.add(diff, diff, 2.0, -100)
-    #Bounding box given as a 4-tuple defining the left, upper, right, and lower pixel coordinates.
-    #If the image is completely empty, this method returns None.
     bbox = diff.getbbox()
-    (tx,ty,bx,by) = bbox
-    xsz = bx-tx
-    ysz = by-ty
-    logger.debug("text[{}] bbox[{},{},{},{}] xsz[{}] ysz[{}]".format(text,tx,ty,bx,by,xsz,ysz))
+    tx, ty, bx, by = bbox
+    logger.debug(f'text[{text}] bbox[{tx},{ty},{bx},{by}] size[{bx-tx},{by-ty}]')
+
     newimg = img.crop(bbox)
     newimg.thumbnail(finishedSize)
-    if args.landscape: 
-        newimg=newimg.rotate(90, expand=True)
-        (newx, newy) = newimg.size
-        bgsize = args.pixwidth, newy    # bg image hack, use whatever Y we got above by the max pixwidth
-        bgimg = Image.new('RGB', bgsize, color='white');
-        # Now paste the newimg on top of bgimg
-        pastex = int((args.pixwidth/2) - (newx/2))
-        logger.debug("landscape bgimg hack, pastex[{}]".format(pastex))
-        bgimg.paste(newimg,(pastex,0))
-        # debug ### bgimg.show()
-        return bgimg
-    #newimg.show() # Debugging
-    #newimg.save("/tmp/save.png")
-    return newimg
+
+    if not args.landscape:
+        if args.debug:
+            newimg.save(f'/tmp/renderTextAsImage-cropped{datetime.datetime.now()}.png')
+        return newimg
+
+    newimg = newimg.rotate(90, expand=True)
+    newx, newy = newimg.size
+    bgimg = Image.new('RGB', (args.pixwidth, newy), color='white')
+    pastex = (args.pixwidth - newx) // 2
+    logger.debug(f'landscape bgimg hack, pastex[{pastex}]')
+    bgimg.paste(newimg, (pastex, 0))
+    return bgimg
+
 
 def autoRotateImage(im):
-    """Attempt to read the exif and rotate the image obj to proper rotation"""
-    try:
-        # rotate using exif if avail
-        for orientation in ExifTags.TAGS.keys():
-            if ExifTags.TAGS[orientation]=='Orientation':
-                break
-        exif=dict(im._getexif().items())
-
-        if exif[orientation] == 3:
-            im=im.rotate(180, expand=True)
-        elif exif[orientation] == 6:
-            im=im.rotate(270, expand=True)
-        elif exif[orientation] == 8:
-            im=im.rotate(90, expand=True)
-
-    except (AttributeError, KeyError, IndexError):
-        # cases: image don't have getexif
-        pass
-    return(im)
+    return ImageOps.exif_transpose(im)
 
 
-logger.info("STARTUP sys.path=[{}]".format(sys.path))
+# --- Printer setup ---
+
+logger.info(f'STARTUP sys.path=[{sys.path}]')
 
 p = escpos.printer.Dummy()
-#imageImpl='bitImageRaster'
-#imageImpl='graphics'
-#imageImpl='bitImageColumn'
-imageImpl=args.impl
-
-# Override the width from profile, if provided
-p.profile.profile_data['media']['width']['pixels']=args.pixwidth
+p.profile.profile_data['media']['width']['pixels'] = args.pixwidth
+imageImpl = args.impl
 
 if args.density:
-    # Its set, convert to int
-    d=int(args.density)
-    logger.info("--density=[{}] d[{}]".format(args.density,d))
-    # func=49, Set density: GS ( K pL pH fn m
-    #        GS  (K  (2byt) fn     d decimal to bin
-    cmd=b'\035(K\002\000\061' + bytearray((d,))
-    logger.debug("Density Command (hex): [{}]".format(' '.join('{:02x}'.format(x) for x in cmd)))
-    #p._raw(b'\035(K\002\000\061' + bytearray((d,)))
+    d = int(args.density)
+    logger.info(f'--density=[{args.density}] d[{d}]')
+    # GS ( K pL pH fn m  (fn=49 sets print density)
+    cmd = b'\x1d(K\x02\x00\x31' + bytearray((d,))
+    logger.debug('Density command (hex): ' + ' '.join(f'{x:02x}' for x in cmd))
     p._raw(cmd)
-    #bomb("Just testing...")
 
 
+def print_image(im, center=False):
+    p.image(im, high_density_vertical=True, high_density_horizontal=True,
+            fragment_height=960, impl=imageImpl, center=center)
 
 
+def print_sep(height=8):
+    print_image(sepPixImage.resize((args.pixwidth, height)))
 
+
+def set_text(align='left', bold=False, size=1, font='a', smooth=False):
+    p.set(align=align, font=font, bold=bold, underline=0,
+          width=size, height=size, density=9, invert=False,
+          smooth=smooth, flip=False, double_width=False,
+          double_height=False, custom_size=True)
+
+
+# --- Ticket rendering ---
 
 if args.logo:
-    logoMax = (args.pixwidth,1500)
-    if args.landscape: 
-        logoMax = (10000,args.pixwidth)
+    logo_max = (10000, args.pixwidth) if args.landscape else (args.pixwidth, 1500)
     if args.logomax:
-        logoMax = (args.logomax,args.logomax)
+        logo_max = (args.logomax, args.logomax)
     im = autoRotateImage(Image.open(args.logo))
-    im.thumbnail(logoMax)
-    if args.landscape: 
-        im=im.rotate(90, expand=True)
-    p.image(im,  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True)
+    im.thumbnail(logo_max)
+    if args.landscape:
+        im = im.rotate(90, expand=True)
+    print_image(im, center=True)
 
-
-p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],15) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
-p.set(align='left', font='a', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=False)
+print_sep(height=15)
+set_text()
 
 if args.header:
     if args.headerttf:
-        p.image(renderTextAsImage(args.header,args.hsize,args.headerttf), high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True )
-        p.text('\n')
+        print_image(renderTextAsImage(args.header, args.hsize, args.headerttf), center=True)
     else:
-        # Super Large for HEADER
-        p.set(align=titleAlign, font='a', bold=True, underline=0, width=args.hsize, height=args.hsize, density=9, invert=False, smooth=True, flip=False, double_width=False, double_height=False, custom_size=True)
-        p.text('{}\n'.format(args.header))
-    # Print sep bar
-    p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],15) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
+        set_text(align=titleAlign, bold=True, size=args.hsize, smooth=True)
+        p.text(f'{args.header}\n')
+    print_sep(height=15)
 
-# Large text for TITLE
 if args.titlettf:
-    p.image(renderTextAsImage(args.title,args.tsize,args.titlettf), high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True )
-    p.text('\n')
+    print_image(renderTextAsImage(args.title, args.tsize, args.titlettf), center=True)
 else:
-    p.set(align=titleAlign, font='a', bold=True, underline=0, width=args.tsize, height=args.tsize, density=9, invert=False, smooth=True, flip=False, double_width=False, double_height=False, custom_size=True)
-    p.text('{}\n'.format(args.title))
-# Print sep bar
-p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],15) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
-
+    set_text(align=titleAlign, bold=True, size=args.tsize, smooth=True)
+    p.text(f'{args.title}\n')
+print_sep(height=15)
 
 if args.bodyttf:
-    allLines=""
+    allLines = ''
     with sys.stdin as lines:
-        for ctr,line in enumerate(lines):
-            if args.head > 0:
-                if ctr > (args.head-1):
-                    break
+        for ctr, line in enumerate(lines):
+            if args.head > 0 and ctr >= args.head:
+                break
             allLines += line
     if allLines:
-        p.image(renderTextAsImage(allLines,args.size,args.bodyttf), high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True )
+        print_image(renderTextAsImage(allLines, args.size, args.bodyttf), center=True)
     p.text('\n')
 else:
-    # Ticket text
-    p.set(align='left', font='a', bold=False, underline=0, width=args.size, height=args.size, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True)
-    # Read body from STDIN up to --head lines
+    set_text(size=args.size)
     with sys.stdin as lines:
-        for ctr,line in enumerate(lines):
-            if args.head > 0:
-                if ctr > (args.head-1):
-                    break
-            p.set(align='left', font='a', bold=False, underline=0, width=args.size, height=args.size, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True)
-            p.text('{}'.format(line))
+        for ctr, line in enumerate(lines):
+            if args.head > 0 and ctr >= args.head:
+                break
+            p.text(line)
             handleBarcodes(line)
 
 if args.image:
+    logo_max = (10000, args.pixwidth) if args.landscape else (args.pixwidth, 1500)
     for imageFile in args.image:
-        logoMax = (args.pixwidth,1500)
-        if args.landscape: 
-            logoMax = (10000,args.pixwidth)
         if args.imagesep:
-            p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],8) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
+            print_sep()
         try:
             im = autoRotateImage(Image.open(imageFile))
-            # Below results in lots of wasted paper... not sure why this barfs
             if args.autorotate:
-                width,height = im.size
+                width, height = im.size
                 if width > height:
-                    im=im.rotate(90, expand=True)
-                    logger.debug("AutoRotated: imageFile[{}] w[{}] h[{}]".format(imageFile,width,height))
+                    im = im.rotate(90, expand=True)
+                    logger.debug(f'AutoRotated: imageFile[{imageFile}] w[{width}] h[{height}]')
                 else:
-                    logger.debug("Not AutoRotated: imageFile[{}] w[{}] h[{}]".format(imageFile,width,height))
-
-
-            im.thumbnail(logoMax)
-            if args.landscape: 
-                im=im.rotate(90, expand=True)
-            p.image(im,  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl, center=True)
-        except BaseException as err:   # Handle file open problems
-            logger.error("While opening image file: {}, Got error: {}".format(imageFile,err))
-            pass
-
+                    logger.debug(f'Not AutoRotated: imageFile[{imageFile}] w[{width}] h[{height}]')
+            im.thumbnail(logo_max)
+            if args.landscape:
+                im = im.rotate(90, expand=True)
+            print_image(im, center=True)
+        except Exception as err:
+            logger.error(f'While opening image file: {imageFile}, Got error: {err}')
         if args.imagename:
-            p.set(align='left', font='a', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True)
-            p.text('[{}]\n'.format(os.path.basename(imageFile)))
+            set_text()
+            p.text(f'[{os.path.basename(imageFile)}]\n')
 
 if args.qrdata:
     for qrd in args.qrdata:
-        p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],8) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
+        print_sep()
         p.qr(qrd, ec=0, size=args.qrsize, model=2, native=False, center=True, impl=imageImpl)
-        p.set(align='center', font='a', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True)
-        p.text('{}\n'.format(qrd))
+        set_text(align='center')
+        p.text(f'{qrd}\n')
 
-# Tiny trailer text
-p.set(align='right', font='b', bold=False, underline=0, width=1, height=1, density=9, invert=False, smooth=False, flip=False, double_width=False, double_height=False, custom_size=True)
-p.image(sepPixImage.resize( (p.profile.profile_data['media']['width']['pixels'],8) ),  high_density_vertical=True, high_density_horizontal=True, fragment_height=960, impl=imageImpl)
-p.text('[{}] {}'.format(datetime.datetime.now(), args.trailer))
+set_text(align='right', font='b')
+print_sep()
+p.text(f'[{datetime.datetime.now()}] {args.trailer}')
 
-#p.text('\n')
-for i in range(args.eject):
+for _ in range(args.eject):
     p.text('\n')
 
 if args.cut:
     p.cut(mode='PART')
-
 if args.beep:
-    p._raw(b'\033\036')
+    p._raw(b'\x1b\x1e')
 
 if args.dummy:
-    logger.info("Dummy mode, no printing")
+    logger.info('Dummy mode, no printing')
 else:
+    lp_cmd = ['lp']
     if args.remote:
-        with subprocess.Popen(['lp', '-h', args.remote, '-d', args.dest], stdin=subprocess.PIPE) as pr:
-            pr.stdin.write(p.output)
-    else:
-        with subprocess.Popen(['lp', '-d', args.dest], stdin=subprocess.PIPE) as pr:
-            pr.stdin.write(p.output)
+        lp_cmd += ['-h', args.remote]
+    lp_cmd += ['-d', args.dest]
+    with subprocess.Popen(lp_cmd, stdin=subprocess.PIPE) as pr:
+        pr.stdin.write(p.output)
