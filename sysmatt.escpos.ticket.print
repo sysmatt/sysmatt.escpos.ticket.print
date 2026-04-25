@@ -57,6 +57,7 @@ parser.add_argument(      "--headerttf",  help="render header as an image using 
 parser.add_argument(      "--titlettf",   help="render title as an image using this TTF font file (--tsize controls font size)", type=str, default='')
 parser.add_argument(      "--hsize",      help="header text size multiplier", type=int, default=4)
 parser.add_argument("-d", "--dest",       help="CUPS printer destination name", type=str, default="citizen-raw")
+parser.add_argument(      "--device",     help="print directly to this device (e.g. /dev/usb/lp0, /dev/ttyUSB0); bypasses CUPS", type=str, default="")
 parser.add_argument("-t", "--trailer",    help="small text appended after the timestamp in the ticket footer", type=str, default="")
 parser.add_argument("-T", "--tsize",      help="title text size multiplier", type=int, default=2)
 parser.add_argument("-S", "--size",       help="body text size multiplier", type=int, default=1)
@@ -288,6 +289,10 @@ if args.beep:
 
 if args.dummy:
     logger.info('Dummy mode, no printing')
+elif args.device:
+    logger.info(f'Direct device output: {args.device}')
+    with open(args.device, 'wb') as dev:
+        dev.write(p.output)
 else:
     lp_cmd = ['lp']
     if args.remote:
