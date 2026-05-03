@@ -77,6 +77,7 @@ parser.add_argument(      "--imagename",  help="print the filename below each im
 parser.add_argument(      "--qrsize",     help="QR code size, 1–16", type=int, default=3)
 parser.add_argument(      "--qrdata",     help="print a QR code at the bottom (repeatable)", type=str, action='append')
 parser.add_argument(      "--dummy",      help="do everything except sending output to the printer", action='store_true')
+parser.add_argument(      "--new-text-render", help="use textbbox-based TTF rendering (exact canvas sizing, correct wrap width)", action='store_true')
 parser.add_argument(      "--autorotate", help="auto-rotate landscape --image inputs to maximise print size", action='store_true')
 parser.add_argument(      "--impl",       help="graphics implementation: bitImageRaster, graphics, or bitImageColumn (default). bitImageRaster works well with Citizen CT-S310; bitImageColumn works with generic 58mm units. YMMV.", type=str, default='bitImageColumn')
 parser.add_argument("title",              help="ticket title (required)", type=str, default="Ticket")
@@ -101,6 +102,12 @@ def handleBarcodes(chunk):
 
 
 def renderTextAsImage(text, fontSize, fontFile):
+    if args.new_text_render:
+        return _renderTextAsImage_new(text, fontSize, fontFile)
+    return _renderTextAsImage_legacy(text, fontSize, fontFile)
+
+
+def _renderTextAsImage_legacy(text, fontSize, fontFile):
     if args.landscape:
         size = (10000, 3000)
         finishedSize = (100000, args.pixwidth)
@@ -156,6 +163,48 @@ def renderTextAsImage(text, fontSize, fontFile):
     logger.debug(f'landscape bgimg hack, pastex[{pastex}]')
     bgimg.paste(newimg, (pastex, 0))
     return bgimg
+
+
+def _renderTextAsImage_new(text, fontSize, fontFile):
+    font = ImageFont.truetype(font=fontFile, size=(fontSize * 2))
+
+    avg_char_width = sum(font.getlength(c) for c in ascii_letters) / len(ascii_letters)
+    max_char_count = args.bodyttfwrap or int(args.pixwidth / avg_char_width)
+    logger.debug(f'max_char_count[{max_char_count}]')
+
+    newtext = '\n'.join(
+        textwrap.fill(line, width=max_char_count, drop_whitespace=False,
+                      replace_whitespace=True, break_long_words=True, break_on_hyphens=False)
+        for line in text.splitlines()
+    ).rstrip()
+    logger.debug(f'post wrap text[{newtext}]')
+
+    probe = ImageDraw.Draw(Image.new('RGB', (1, 1)))
+    x0, y0, x1, y1 = probe.textbbox((0, 0), newtext, font=font)
+    w, h = x1 - x0, y1 - y0
+
+    img = Image.new('RGB', (w + 4, h + 4), color='white')
+    ImageDraw.Draw(img).text((-x0 + 2, -y0 + 2), newtext, font=font, fill='#000000')
+
+    if args.debug:
+        img.save(f'/tmp/renderTextAsImage{datetime.datetime.now()}.png')
+
+    logger.debug(f'new render canvas size[{img.size}]')
+
+    if args.landscape:
+        img.thumbnail((100000, args.pixwidth))
+        img = img.rotate(90, expand=True)
+        newx, newy = img.size
+        bgimg = Image.new('RGB', (args.pixwidth, newy), color='white')
+        pastex = (args.pixwidth - newx) // 2
+        logger.debug(f'landscape bgimg hack, pastex[{pastex}]')
+        bgimg.paste(img, (pastex, 0))
+        return bgimg
+
+    img.thumbnail((args.pixwidth, 200000))
+    if args.debug:
+        img.save(f'/tmp/renderTextAsImage-cropped{datetime.datetime.now()}.png')
+    return img
 
 
 def autoRotateImage(im):

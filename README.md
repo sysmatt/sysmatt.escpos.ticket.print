@@ -114,6 +114,12 @@ echo -e "Line 1\nLine 2\nLine 3" | ./sysmatt.escpos.ticket.print \
 | `--bodyttfwrap` | `0` | Force word-wrap at N characters when rendering body with TTF (0 = auto) |
 | `-H`, `--head` | `0` | Print only the first N lines of body text (0 = no limit) |
 
+### TTF rendering engine
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--new-text-render` | off | Use the improved `textbbox`-based TTF renderer — see [TTF font rendering](#ttf-font-rendering) |
+
 ### Images
 
 | Flag | Default | Description |
@@ -179,9 +185,17 @@ The graphics implementation flag controls how images are sent to the printer. Th
 
 ## TTF font rendering
 
-When `--bodyttf`, `--headerttf`, or `--titlettf` are specified, text is rasterised into an image using Pillow before being sent to the printer. This allows custom fonts regardless of what the printer natively supports. The image is cropped tightly to the text content and scaled to fit `--pixwidth`.
+When `--bodyttf`, `--headerttf`, or `--titlettf` are specified, text is rasterised into an image using Pillow before being sent to the printer. This allows custom fonts regardless of what the printer natively supports. The image is scaled to fit `--pixwidth`.
 
 Use `--debug` to save intermediate render images to `/tmp/` for inspection.
+
+### Legacy renderer (default)
+
+Renders text onto a large scratch canvas (up to 40 megapixels), then uses `ImageChops` differencing to detect and crop the text bounding box. Word-wrap width is calculated against the scratch canvas width rather than `--pixwidth`.
+
+### New renderer (`--new-text-render`)
+
+Uses Pillow's `draw.textbbox()` to measure exact text dimensions before allocating the canvas, so the image is sized to fit the text from the start — no scratch canvas, no `ImageChops` autocrop. Word-wrap width is calculated against `--pixwidth` directly, which is more accurate. Requires Pillow 8.0.0 or newer (included in `requirements.txt`).
 
 ---
 
