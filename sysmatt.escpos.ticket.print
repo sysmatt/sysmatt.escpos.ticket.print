@@ -84,6 +84,9 @@ parser.add_argument("title",              help="ticket title (required)", type=s
 
 args = parser.parse_args()
 
+if args.pixwidth <= 0:
+    parser.error(f"--pixwidth must be > 0 (got {args.pixwidth})")
+
 if args.verbose:
     logger.setLevel(logging.INFO)
 if args.debug:
@@ -145,6 +148,9 @@ def _renderTextAsImage_legacy(text, fontSize, fontFile):
     diff = ImageChops.difference(img, bg)
     diff = ImageChops.add(diff, diff, 2.0, -100)
     bbox = diff.getbbox()
+    if bbox is None:
+        logger.warning(f'renderTextAsImage: no visible text content in image for text={text!r}')
+        bbox = (0, 0, img.size[0], img.size[1])
     tx, ty, bx, by = bbox
     logger.debug(f'text[{text}] bbox[{tx},{ty},{bx},{by}] size[{bx-tx},{by-ty}]')
 
